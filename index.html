@@ -280,15 +280,25 @@
         const gridSize = 20;
         const tileCount = canvas.width / gridSize;
 
+        // Logical snake state (grid positions)
         let snake = [];
         let food = {};
         let direction = { x: 1, y: 0 };
         let nextDirection = { x: 1, y: 0 };
+
+        // Visual state for smooth interpolation
+        let visualSnake = [];
+
         let score = 0;
         let highScore = localStorage.getItem('snakeHighScore') || 0;
-        let gameLoop = null;
         let isRunning = false;
         let isPaused = false;
+
+        // Animation state
+        let lastTime = 0;
+        let accumulator = 0;
+        let baseInterval = 150; // Base game tick (ms)
+        let tickProgress = 0; // 0 to 1 between ticks
 
         highScoreEl.textContent = highScore;
 
@@ -300,10 +310,12 @@
             ];
             direction = { x: 1, y: 0 };
             nextDirection = { x: 1, y: 0 };
+            visualSnake = snake.map(s => ({ ...s }));
             score = 0;
             scoreEl.textContent = score;
             spawnFood();
             updateSpeed();
+            tickProgress = 0;
         }
 
         function spawnFood() {
@@ -319,9 +331,11 @@
             const speed = 20 + Math.floor(score / 5) * 5;
             const percentage = Math.min(100, speed);
             speedFill.style.width = percentage + '%';
+            // Update interval based on score (faster as score increases)
+            baseInterval = Math.max(60, 150 - Math.floor(score / 5) * 10);
         }
 
-        function gameStep() {
+        function gameTick() {
             if (isPaused) return;
 
             direction = nextDirection;
@@ -355,7 +369,14 @@
                 snake.pop();
             }
 
-            draw();
+            // Update visual snake tail
+            while (visualSnake.length > snake.length) {
+                visualSnake.pop();
+            }
+        }
+
+        function lerp(a, b, t) {
+            return a + (b - a) * t;
         }
 
         function draw() {
@@ -390,59 +411,83 @@
             ctx.arc(foodCenterX, foodCenterY, gridSize, 0, Math.PI * 2);
             ctx.fill();
 
-            // Food body
+            // Food body with subtle pulse
+            const pulse = 1 + Math.sin(Date.now() * 0.005) * 0.1;
             ctx.fillStyle = '#e94560';
             ctx.beginPath();
-            ctx.arc(foodCenterX, foodCenterY, gridSize / 2 - 2, 0, Math.PI * 2);
+            ctx.arc(foodCenterX, foodCenterY, (gridSize / 2 - 2) * pulse, 0, Math.PI * 2);
             ctx.fill();
 
-            // Draw snake
-            snake.forEach((segment, index) => {
-                const x = segment.x * gridSize;
-                const y = segment.y * gridSize;
+            // Update and draw visual snake with interpolation
+            for (let i = 0; i < snake.length; i++) {
+                const logicalPos = snake[i];
+                const targetVisual = {
+                    x: logicalPos.x * gridSize,
+                    y: logicalPos.y * gridSize
+                };
+
+                if (i < visualSnake.length) {
+                    const currentVisual = visualSnake[i];
+                    targetVisual.x = lerp(currentVisual.x, logicalPos.x * gridSize, 0.3);
+                    targetVisual.y = lerp(currentVisual.y, logicalPos.y * gridSize, 0.3);
+                    visualSnake[i] = { x: targetVisual.x, y: targetVisual.y };
+                } else {
+                    visualSnake.push({ ...targetVisual });
+                }
+
+                const x = targetVisual.x;
+                const y = targetVisual.y;
                 const size = gridSize - 2;
                 const offset = 1;
 
                 // Gradient color based on position
-                const hue = 160 + (index / snake.length) * 40;
-                const lightness = 50 - (index / snake.length) * 15;
+                const hue = 160 + (i / snake.length) * 40;
+                const lightness = 50 - (i / snake.length) * 15;
 
                 ctx.fillStyle = `hsl(${hue}, 70%, ${lightness}%)`;
 
                 // Rounded rectangle for segments
-                const radius = index === 0 ? 8 : 5;
+                const radius = i === 0 ? 8 : 5;
                 roundRect(ctx, x + offset, y + offset, size, size, radius);
                 ctx.fill();
 
                 // Eyes on head
-                if (index === 0) {
+                if (i === 0) {
                     ctx.fillStyle = '#fff';
                     const eyeSize = 3;
                     const eyeOffset = 5;
 
+                    // Eyes follow direction
+                    let eyes = [];
                     if (direction.x === 1) {
-                        ctx.beginPath();
-                        ctx.arc(x + gridSize - eyeOffset, y + eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.arc(x + gridSize - eyeOffset, y + gridSize - eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.fill();
+                        eyes = [
+                            { dx: gridSize - eyeOffset, dy: eyeOffset },
+                            { dx: gridSize - eyeOffset, dy: gridSize - eyeOffset }
+                        ];
                     } else if (direction.x === -1) {
-                        ctx.beginPath();
-                        ctx.arc(x + eyeOffset, y + eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.arc(x + eyeOffset, y + gridSize - eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.fill();
+                        eyes = [
+                            { dx: eyeOffset, dy: eyeOffset },
+                            { dx: eyeOffset, dy: gridSize - eyeOffset }
+                        ];
                     } else if (direction.y === 1) {
-                        ctx.beginPath();
-                        ctx.arc(x + eyeOffset, y + gridSize - eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.arc(x + gridSize - eyeOffset, y + gridSize - eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.fill();
+                        eyes = [
+                            { dx: eyeOffset, dy: gridSize - eyeOffset },
+                            { dx: gridSize - eyeOffset, dy: gridSize - eyeOffset }
+                        ];
                     } else {
-                        ctx.beginPath();
-                        ctx.arc(x + eyeOffset, y + eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.arc(x + gridSize - eyeOffset, y + eyeOffset, eyeSize, 0, Math.PI * 2);
-                        ctx.fill();
+                        eyes = [
+                            { dx: eyeOffset, dy: eyeOffset },
+                            { dx: gridSize - eyeOffset, dy: eyeOffset }
+                        ];
                     }
+
+                    eyes.forEach(eye => {
+                        ctx.beginPath();
+                        ctx.arc(x + eye.dx, y + eye.dy, eyeSize, 0, Math.PI * 2);
+                        ctx.fill();
+                    });
                 }
-            });
+            }
         }
 
         function roundRect(ctx, x, y, width, height, radius) {
@@ -461,8 +506,8 @@
 
         function gameOver() {
             isRunning = false;
-            clearInterval(gameLoop);
-            gameLoop = null;
+            cancelAnimationFrame(animationId);
+            animationId = null;
 
             finalScoreEl.textContent = score;
 
@@ -478,24 +523,64 @@
             overlay.classList.add('active');
         }
 
+        let animationId = null;
+
+        function gameLoop(currentTime) {
+            if (!isRunning || isPaused) {
+                if (isRunning) {
+                    animationId = requestAnimationFrame(gameLoop);
+                }
+                return;
+            }
+
+            // Delta time handling
+            if (!lastTime) lastTime = currentTime;
+            const deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+
+            accumulator += deltaTime;
+
+            // Process game ticks
+            while (accumulator >= baseInterval) {
+                gameTick();
+                accumulator -= baseInterval;
+            }
+
+            // Always draw for smooth visuals
+            draw();
+
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
         function startGame() {
-            if (isRunning) return;
+            if (isRunning) {
+                // Restart
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
 
             init();
             isRunning = true;
             isPaused = false;
             overlay.classList.remove('active');
             startBtn.textContent = 'Restart';
+            pauseBtn.textContent = 'Pauza';
 
-            const speed = Math.max(50, 150 - Math.floor(score / 5) * 10);
-            gameLoop = setInterval(gameStep, speed);
-            draw();
+            lastTime = 0;
+            accumulator = 0;
+            animationId = requestAnimationFrame(gameLoop);
         }
 
         function togglePause() {
             if (!isRunning) return;
             isPaused = !isPaused;
             pauseBtn.textContent = isPaused ? 'Wznów' : 'Pauza';
+
+            // Reset timing when resuming
+            if (!isPaused) {
+                lastTime = 0;
+                accumulator = 0;
+            }
         }
 
         // Keyboard controls
